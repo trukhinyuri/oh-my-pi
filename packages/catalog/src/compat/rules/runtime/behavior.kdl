@@ -334,6 +334,8 @@ behavior {
 	// Moonshot serves K3 at its documented 1M/131K window when /models omits
 	// limit fields (#5756).
 	model-limits provider="moonshot" {
+		limits "kimi-k3.1-pro" context=1048576 max-tokens=131072
+		limits "kimi-k3.1-pro-highspeed" context=1048576 max-tokens=131072
 		limits "kimi-k3" context=1048576 max-tokens=131072
 	}
 	// Kimi Code's /coding/v1/models envelope carries no output-limit field;
@@ -451,6 +453,10 @@ behavior {
 		model "anthropic/claude-fable-5"
 		model "claude-fable-5"
 		model "fable-5"
+		model "kimi-code/k3.1-pro"
+		model "kimi-k3.1-pro"
+		model "moonshotai/kimi-k3.1-pro"
+		model "k3.1-pro"
 		model "kimi-code/k3"
 		model "kimi-k3"
 		model "moonshotai/kimi-k3"

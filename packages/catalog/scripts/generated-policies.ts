@@ -94,6 +94,7 @@ export function rebakeModelThinking(model: ModelSpec<Api>): void {
 		return;
 	}
 	if (model.provider === "cline-pass" && model.thinking) return;
+	if (model.provider === "kimi-code" && model.thinking) return;
 	// Discovery rows that trust only their explicit thinking carry a live
 	// ladder (or deliberately none); the generic deriver would erase it.
 	if (model.compat && "trustExplicitThinkingOnly" in model.compat && model.compat.trustExplicitThinkingOnly === true)

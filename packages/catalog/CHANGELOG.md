@@ -6,6 +6,10 @@
 
 - Added LM Studio decision models to discovery: models LM Studio reports as `type: "decision"` are listed as `judge` models served over its `/v1/decisions` endpoint, alongside its chat models ([#17169](https://github.com/can1357/oh-my-pi/pull/17169) by [@richiestanaway](https://github.com/richiestanaway))
 
+### Fixed
+
+- Kimi Code now uses its live model roster and thinking settings instead of merging retired bundled models, defaults to K3.1 Pro, and preserves Moonshot K3.1 Pro's 1M context fallback.
+
 ## [18.13.1] - 2026-10-27
 
 ### Added

@@ -3,9 +3,13 @@ import { buildModel } from "@oh-my-pi/pi-catalog/build";
 import { Effort } from "@oh-my-pi/pi-catalog/effort";
 import { resolveProviderModels } from "@oh-my-pi/pi-catalog/model-manager";
 import { calculateCost } from "@oh-my-pi/pi-catalog/models";
-import { kimiCodeModelManagerOptions } from "@oh-my-pi/pi-catalog/provider-models/openai-compat";
+import {
+	kimiCodeModelManagerOptions,
+	moonshotModelManagerOptions,
+} from "@oh-my-pi/pi-catalog/provider-models/openai-compat";
 import type { FetchImpl } from "@oh-my-pi/pi-catalog/types";
 import { TempDir } from "@oh-my-pi/pi-utils";
+import { rebakeModelThinking } from "../scripts/generated-policies";
 
 const LIVE_K3 = {
 	id: "k3",
@@ -29,6 +33,59 @@ async function discover(models: readonly Record<string, unknown>[]) {
 }
 
 describe("Kimi Code provider catalog", () => {
+	it("replaces bundled models with the successful live roster", async () => {
+		await using temp = await TempDir.create("@kimi-code-authoritative-");
+		const { models } = await resolveProviderModels(
+			{
+				...kimiCodeModelManagerOptions({
+					apiKey: "test-key",
+					fetch: async () => Response.json({ data: [LIVE_K3] }),
+				}),
+				cacheDbPath: temp.join("models.db"),
+			},
+			"online",
+		);
+		expect(models.map(model => model.id)).toEqual(["k3"]);
+		expect(models[0]?.thinking).toMatchObject({
+			efforts: [Effort.Low, Effort.High, Effort.Max],
+			defaultLevel: Effort.Max,
+			requiresEffort: true,
+		});
+	});
+
+	it("preserves discovery-authored thinking when regenerating bundled models", async () => {
+		const specs = await kimiCodeModelManagerOptions({
+			apiKey: "test-key",
+			fetch: async () => Response.json({ data: [LIVE_K3] }),
+		}).fetchDynamicModels?.();
+		expect(specs).toHaveLength(1);
+		for (const spec of specs ?? []) {
+			const thinking = spec.thinking;
+			expect(thinking).toBeDefined();
+			rebakeModelThinking(spec);
+			expect(spec.thinking).toEqual(thinking);
+		}
+	});
+
+	it("does not add an effort dial to K2.7 Code Highspeed", async () => {
+		const models = await discover([
+			{ id: "kimi-for-coding-highspeed", supports_reasoning: true, supports_thinking_type: "only" },
+		]);
+		expect(models[0]?.reasoning).toBe(true);
+		expect(models[0]?.thinking).toBeUndefined();
+	});
+
+	it("uses Moonshot K3.1 limits when discovery omits its context and output caps", async () => {
+		const specs = await moonshotModelManagerOptions({
+			apiKey: "test-key",
+			fetch: async () => Response.json({ data: [{ id: "kimi-k3.1-pro" }, { id: "kimi-k3.1-pro-highspeed" }] }),
+		}).fetchDynamicModels?.();
+		expect(specs).toHaveLength(2);
+		for (const spec of specs ?? []) {
+			expect(buildModel(spec)).toMatchObject({ contextWindow: 1_048_576, maxTokens: 131_072 });
+		}
+	});
+
 	it("uses live K3 effort, mandatory-thinking, and native-protocol metadata", async () => {
 		const models = await discover([LIVE_K3]);
 		const model = models.find(candidate => candidate.id === "k3");
@@ -128,7 +185,7 @@ describe("Kimi Code provider catalog", () => {
 		});
 	});
 
-	it("bills K3 cache writes from the cold offline and failed-discovery catalogs", async () => {
+	it("bills K3 and K3.1 Pro cache writes from the cold offline and failed-discovery catalogs", async () => {
 		await using temp = await TempDir.create("@kimi-code-cache-write-");
 		for (const strategy of ["offline", "online"] as const) {
 			const { models } = await resolveProviderModels(
@@ -144,6 +201,8 @@ describe("Kimi Code provider catalog", () => {
 			for (const [id, expectedCost] of [
 				["k3", 3],
 				["k3-256k", 3],
+				["k3.1-pro", 2],
+				["k3.1-pro-highspeed", 4],
 				["kimi-for-coding", 0],
 			] as const) {
 				const model = models.find(candidate => candidate.id === id);
