@@ -4224,6 +4224,7 @@ export function kimiCodeModelManagerOptions(
 	const baseUrl = config?.baseUrl ?? "https://api.kimi.com/coding/v1";
 	return {
 		providerId: "kimi-code",
+		dynamicModelsAuthoritative: true,
 		...(apiKey && {
 			fetchDynamicModels: () =>
 				fetchOpenAICompatibleModels({

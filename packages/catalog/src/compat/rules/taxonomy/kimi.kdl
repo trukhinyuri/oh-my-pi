@@ -1,9 +1,10 @@
 class "kimi" {
     namespace "moonshotai"
     bounded "kimi"
-    // Kimi Code exposes bare K3 SKUs; selectors may include a provider namespace.
+    // Kimi Code exposes bare K3/K3.1 SKUs; selectors may include a provider namespace.
     exact "k3"
     exact "k3-256k"
+    bounded "k3.1"
 
     family "k2" glob="*kimi-k2*"
     family "k2.5" glob="*kimi-k2.5*" priority=10
@@ -18,6 +19,7 @@ class "kimi" {
     family "k3" glob="*kimi-k3*"
     family "k3" glob="k3"
     family "k3" glob="k3-256k"
+    family "k3" glob="k3.1-*"
 
     override id="kilo-kimi-k2-thinking-product" provider="kilo" model="kimi-k2-thinking" logical="moonshotai/kimi-k2-thinking" class="kimi" rationale="Oracle exposes this independently priced product rather than an effort route" provenance="fixtures/llm-oracle/catalog/models.normalized.json"
     override id="openrouter-kimi-k2-thinking-product" provider="openrouter" model="kimi-k2-thinking" logical="moonshotai/kimi-k2-thinking" class="kimi" rationale="Oracle exposes this independently priced product rather than an effort route" provenance="fixtures/llm-oracle/catalog/models.normalized.json"

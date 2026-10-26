@@ -72,6 +72,7 @@ function keepsExplicitThinking(row: RowLike): boolean {
 		return true;
 	}
 	if (row.provider === "cline-pass" && row.thinking) return true;
+	if (row.provider === "kimi-code" && row.thinking) return true;
 	if (row.compatConfig?.trustExplicitThinkingOnly === true) return true;
 	if (row.provider === "openrouter" && row.thinking?.requiresEffort === true) return true;
 	return false;

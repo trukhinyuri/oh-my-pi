@@ -75,6 +75,8 @@ describe("Kimi Code provider catalog", () => {
 	it("derives per-family output caps instead of a blanket constant (#6711)", async () => {
 		const models = await discover([
 			LIVE_K3,
+			{ ...LIVE_K3, id: "k3.1-pro", display_name: "K3.1 Pro", context_length: 1_048_576 },
+			{ ...LIVE_K3, id: "k3.1-pro-highspeed", display_name: "K3.1 Pro Highspeed", context_length: 1_048_576 },
 			{ ...LIVE_K3, id: "k3-256k", display_name: "K3 256k", context_length: 262_144 },
 			{ id: "kimi-for-coding", display_name: "K2.7 Code", context_length: 262_144, supports_reasoning: true },
 			{
@@ -87,6 +89,8 @@ describe("Kimi Code provider catalog", () => {
 		]);
 		const maxTokensFor = (id: string) => models.find(model => model.id === id)?.maxTokens;
 
+		expect(maxTokensFor("k3.1-pro")).toBe(131_072);
+		expect(maxTokensFor("k3.1-pro-highspeed")).toBe(131_072);
 		expect(maxTokensFor("k3")).toBe(131_072);
 		expect(maxTokensFor("k3-256k")).toBe(131_072);
 		expect(maxTokensFor("kimi-for-coding")).toBe(32_768);
@@ -105,11 +109,29 @@ describe("Kimi Code provider catalog", () => {
 
 	it("prices $0-discovered rows instead of recording $0 in usage stats", async () => {
 		// /coding/v1/models carries no pricing: rows take their
-		// cost-fallback (k3 at the public K3 list, including its 5m cache
-		// write; kimi-k2 at the K2 list; kimi-for-coding at the K2.7 Code
-		// line rate because K2.8 Preview has no public SKU).
-		const models = await discover([LIVE_K3, { ...LIVE_K3, id: "kimi-for-coding" }, { ...LIVE_K3, id: "kimi-k2" }]);
+		// cost-fallback (k3 and k3.1-pro at the public K3/K3.1 list, including
+		// their 5m cache write; kimi-k2 at the K2 list; kimi-for-coding at the
+		// K2.7 Code line rate because K2.8 Preview has no public SKU).
+		const models = await discover([
+			{ ...LIVE_K3, id: "k3.1-pro" },
+			{ ...LIVE_K3, id: "k3.1-pro-highspeed" },
+			LIVE_K3,
+			{ ...LIVE_K3, id: "kimi-for-coding" },
+			{ ...LIVE_K3, id: "kimi-k2" },
+		]);
 
+		expect(models.find(candidate => candidate.id === "k3.1-pro")?.cost).toMatchObject({
+			input: 2,
+			output: 10,
+			cacheRead: 0.2,
+			cacheWrite: 2,
+		});
+		expect(models.find(candidate => candidate.id === "k3.1-pro-highspeed")?.cost).toMatchObject({
+			input: 4,
+			output: 20,
+			cacheRead: 0.2,
+			cacheWrite: 4,
+		});
 		expect(models.find(candidate => candidate.id === "k3")?.cost).toMatchObject({
 			input: 3,
 			output: 15,
@@ -128,7 +150,7 @@ describe("Kimi Code provider catalog", () => {
 		});
 	});
 
-	it("bills K3 cache writes from the cold offline and failed-discovery catalogs", async () => {
+	it("bills K3 and K3.1 Pro cache writes from the cold offline and failed-discovery catalogs", async () => {
 		await using temp = await TempDir.create("@kimi-code-cache-write-");
 		for (const strategy of ["offline", "online"] as const) {
 			const { models } = await resolveProviderModels(
@@ -144,6 +166,8 @@ describe("Kimi Code provider catalog", () => {
 			for (const [id, expectedCost] of [
 				["k3", 3],
 				["k3-256k", 3],
+				["k3.1-pro", 2],
+				["k3.1-pro-highspeed", 4],
 				["kimi-for-coding", 0],
 			] as const) {
 				const model = models.find(candidate => candidate.id === id);

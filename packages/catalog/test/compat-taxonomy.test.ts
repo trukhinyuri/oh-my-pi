@@ -95,6 +95,9 @@ describe("classifyModel", () => {
 			["", "kimi-coding/K3-256K"],
 			["kimi-code", "k3-256k"],
 			["kimi-coding", "K3-256K"],
+			["", "k3.1-pro"],
+			["kimi-code", "k3.1-pro"],
+			["kimi-code", "k3.1-pro-highspeed"],
 		] as const) {
 			expect(classifyModel(provider, model)).toEqual({ class: "kimi", family: "k3" });
 		}
