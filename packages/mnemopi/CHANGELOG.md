@@ -14,6 +14,10 @@
 
 - Updated Bun engine requirement to ≥1.4.4
 
+### Fixed
+
+- Fixed local embeddings padding every text to 512 tokens, which made a short recall query several times slower than needed; each batch is now padded only to its longest text, with the same vectors
+
 ## [18.13.2] - 2026-10-27
 
 ### Fixed

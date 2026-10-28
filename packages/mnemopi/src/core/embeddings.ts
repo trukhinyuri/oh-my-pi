@@ -15,7 +15,8 @@ import {
 } from "@oh-my-pi/pi-utils";
 import { LRUCache } from "@oh-my-pi/pi-utils/lru";
 import type { EmbeddingModel } from "fastembed";
-import { loadFastembed, withEmbedSessionBudget } from "./fastembed-runtime";
+import { fastembedModelDir } from "./fastembed-model-cache";
+import { loadFastembed, withBatchLongestPadding, withEmbedSessionBudget } from "./fastembed-runtime";
 import {
 	type EmbeddingOutput,
 	getMnemopiRuntimeOptions,
@@ -104,12 +105,15 @@ export async function quarantineCorruptModelFile(message: string, cacheDir?: str
  * embedding thread budget ({@link withEmbedSessionBudget}); it is off again by
  * the time this returns, and never touches a session built from anywhere else,
  * so a consumer sharing the same onnxruntime copy keeps its own defaults.
+ *
+ * The model it returns pads each batch only to its longest text
+ * ({@link withBatchLongestPadding}) rather than to the model's limit.
  */
 export async function defaultLocalModelInitializer(options: LocalModelInitOptions): Promise<LocalEmbeddingModel> {
 	const cacheDir = options.cacheDir ?? getFastembedCacheDir();
 	const initOptions = options.cacheDir === undefined ? { ...options, cacheDir } : options;
 	const { FlagEmbedding } = await loadFastembed();
-	return withEmbedSessionBudget(cacheDir, async () => {
+	const model = await withEmbedSessionBudget(cacheDir, async () => {
 		try {
 			return await FlagEmbedding.init(initOptions);
 		} catch (error) {
@@ -120,6 +124,7 @@ export async function defaultLocalModelInitializer(options: LocalModelInitOption
 			throw error;
 		}
 	});
+	return withBatchLongestPadding(model, fastembedModelDir(options.model, cacheDir));
 }
 
 function activeEmbeddingOptions() {

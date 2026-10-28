@@ -140,8 +140,8 @@ export async function prepareWindowsFastembedRuntime({
  * fastembed creates its ONNX session without any thread option, so
  * onnxruntime applies its own defaults: one intra-op thread per physical core,
  * with those threads spinning between operators. The real work of embedding a
- * recall query is about half a CPU-second (fastembed pads every text to the
- * model's maximum length), so on a many-core host most of what the default
+ * recall query was about half a CPU-second when fastembed padded every text to
+ * the model's maximum length, so on a many-core host most of what the default
  * pool burns beyond that is spin and scheduling. Measured on a 32-core host,
  * one short query cost 3.85 CPU-seconds and kept 31 cores busy for 124 ms;
  * with the budget below it costs 0.56 CPU-seconds and finishes in 178 ms, and its
@@ -298,6 +298,169 @@ export async function withEmbedSessionBudget<T>(
 	} finally {
 		release?.();
 	}
+}
+
+/** One text as `@anush008/tokenizers` encodes it. */
+interface EncodedText {
+	getIds(): number[];
+	getTypeIds(): number[];
+	getAttentionMask(): number[];
+}
+
+/**
+ * The fields of a fastembed `FlagEmbedding` its `embed` runs on. fastembed
+ * declares them `private`, but they are plain instance fields of the exact
+ * release {@link FASTEMBED_SPEC} pins.
+ */
+interface FlagEmbeddingFields {
+	tokenizer: {
+		setPadding(options: { padId: number; padToken: string }): void;
+		encodeBatch(texts: string[]): Promise<EncodedText[]>;
+	};
+	session: Ort.InferenceSession;
+	model: string;
+	pooling: "cls" | "mean";
+}
+
+/** A local embedding model whose `embed` pads each batch only to its longest text. */
+export interface BatchLongestEmbedding {
+	embed(texts: string[], batchSize?: number): AsyncGenerator<number[][], void, unknown>;
+}
+
+function isFlagEmbedding(model: object): model is FlagEmbeddingFields {
+	if (!("tokenizer" in model && "session" in model && "model" in model && "pooling" in model)) return false;
+	const { tokenizer, session, pooling } = model;
+	return (
+		typeof model.model === "string" &&
+		(pooling === "cls" || pooling === "mean") &&
+		typeof tokenizer === "object" &&
+		tokenizer !== null &&
+		"encodeBatch" in tokenizer &&
+		typeof tokenizer.encodeBatch === "function" &&
+		"setPadding" in tokenizer &&
+		typeof tokenizer.setPadding === "function" &&
+		typeof session === "object" &&
+		session !== null &&
+		"run" in session &&
+		typeof session.run === "function"
+	);
+}
+
+/**
+ * The pad token fastembed configures for the model in `modelDir`, read from
+ * the same two files its tokenizer setup reads; `null` when they do not name one.
+ */
+async function readPadToken(modelDir: string): Promise<{ padId: number; padToken: string } | null> {
+	const [config, tokenizerConfig]: unknown[] = await Promise.all([
+		Bun.file(path.join(modelDir, "config.json")).json(),
+		Bun.file(path.join(modelDir, "tokenizer_config.json")).json(),
+	]);
+	if (typeof config !== "object" || config === null || !("pad_token_id" in config)) return null;
+	if (typeof tokenizerConfig !== "object" || tokenizerConfig === null || !("pad_token" in tokenizerConfig))
+		return null;
+	const { pad_token_id: padId } = config;
+	const { pad_token: padToken } = tokenizerConfig;
+	return typeof padId === "number" && typeof padToken === "string" ? { padId, padToken } : null;
+}
+
+/** fastembed's pooling for one row: the first token (`cls`), or the mean of the tokens the mask keeps. */
+function poolRow(
+	data: Float32Array,
+	offset: number,
+	tokens: number,
+	hiddenSize: number,
+	mask: number[],
+	pooling: FlagEmbeddingFields["pooling"],
+): number[] {
+	if (pooling === "cls") return Array.from(data.subarray(offset, offset + hiddenSize));
+	const sum = new Float64Array(hiddenSize);
+	let tokenCount = 0;
+	for (let token = 0; token < tokens; token++) {
+		if (mask[token] === 0) continue;
+		tokenCount++;
+		const tokenOffset = offset + token * hiddenSize;
+		for (let i = 0; i < hiddenSize; i++) sum[i] += data[tokenOffset + i];
+	}
+	return Array.from(sum, value => value / Math.max(tokenCount, 1e-9));
+}
+
+/** fastembed's normalization: scale to unit length. */
+function normalize(vector: number[]): number[] {
+	const norm = Math.sqrt(vector.reduce((acc, value) => acc + value * value, 0));
+	return vector.map(value => value / Math.max(norm, 1e-12));
+}
+
+async function* embedBatchLongest(
+	fields: FlagEmbeddingFields,
+	Tensor: typeof Ort.Tensor,
+	texts: string[],
+	batchSize = 256,
+): AsyncGenerator<number[][], void, unknown> {
+	for (let start = 0; start < texts.length; start += batchSize) {
+		const batch = texts.slice(start, start + batchSize);
+		const rows = (await fields.tokenizer.encodeBatch(batch)).map(text => ({
+			ids: text.getIds(),
+			typeIds: text.getTypeIds(),
+			mask: text.getAttentionMask(),
+		}));
+		// Padded to the longest row, which truncation caps at the model limit.
+		const tokens = rows[0]?.ids.length ?? 0;
+		const dims = [batch.length, tokens];
+		const ids = new BigInt64Array(batch.length * tokens);
+		const typeIds = new BigInt64Array(ids.length);
+		const mask = new BigInt64Array(ids.length);
+		for (const [row, encoded] of rows.entries()) {
+			const offset = row * tokens;
+			for (let token = 0; token < tokens; token++) {
+				ids[offset + token] = BigInt(encoded.ids[token]);
+				typeIds[offset + token] = BigInt(encoded.typeIds[token]);
+				mask[offset + token] = BigInt(encoded.mask[token]);
+			}
+		}
+		const inputs: Record<string, Ort.Tensor> = {
+			input_ids: new Tensor("int64", ids, dims),
+			attention_mask: new Tensor("int64", mask, dims),
+		};
+		// The same input set fastembed feeds: multilingual-e5-large takes no token type ids.
+		if (fields.model !== "fast-multilingual-e5-large") inputs.token_type_ids = new Tensor("int64", typeIds, dims);
+		const { last_hidden_state: hidden } = await fields.session.run(inputs);
+		const [, sequence = 0, hiddenSize = 0] = hidden.dims;
+		// The model's float32 output, which fastembed pools as is.
+		const data = hidden.data as Float32Array;
+		yield rows.map((encoded, row) =>
+			normalize(poolRow(data, row * sequence * hiddenSize, sequence, hiddenSize, encoded.mask, fields.pooling)),
+		);
+	}
+}
+
+/**
+ * Make a fastembed model pad each batch only to its longest text.
+ *
+ * fastembed configures its tokenizer to pad every text to the model's limit
+ * (512 tokens) and encodes each text on its own, so every forward pass runs
+ * over 512 positions however short the texts are. A recall query is tens of
+ * tokens, so most of the work went into padding. Here the batch is encoded in
+ * one `encodeBatch` call with BatchLongest padding; truncation stays at the
+ * model limit, so no row is ever longer than before. The attention mask keeps
+ * padding out of both attention and pooling, so the vectors match fastembed's
+ * while each forward pass only covers the batch's real length; pooling and
+ * normalization repeat fastembed's.
+ *
+ * Switching the padding changes the tokenizer `model` owns, so only the
+ * returned object may embed with it afterwards. Anything that is not a
+ * fastembed `FlagEmbedding`, or a model whose files name no pad token, comes
+ * back as it was.
+ */
+export async function withBatchLongestPadding<T extends object>(
+	model: T,
+	modelDir: string | null,
+): Promise<T | BatchLongestEmbedding> {
+	if (modelDir === null || !isFlagEmbedding(model)) return model;
+	const padding = await readPadToken(modelDir);
+	if (padding === null) return model;
+	model.tokenizer.setPadding(padding);
+	const { Tensor } = pairedFastembedOrt();
+	return { embed: (texts, batchSize) => embedBatchLongest(model, Tensor, texts, batchSize) };
 }
 
 export function loadFastembed(): Promise<FastembedModule> {

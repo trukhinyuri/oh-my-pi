@@ -26,6 +26,12 @@ const FASTEMBED_TOKENIZER_FILES = [
 	"special_tokens_map.json",
 ] as const;
 
+/** Directory fastembed caches `model` in under `cacheDir`, or `null` for a model fastembed has no source for. */
+export function fastembedModelDir(model: string, cacheDir: string): string | null {
+	const source = FASTEMBED_MODEL_SOURCES[model];
+	return source === undefined ? null : path.join(cacheDir, source.repo.replace("/", "_"));
+}
+
 /**
  * Whether `FlagEmbedding.init` can load `model` from `cacheDir` without a
  * download. fastembed caches each file under `<cacheDir>/<repo with / → _>/`
@@ -35,8 +41,8 @@ const FASTEMBED_TOKENIZER_FILES = [
  */
 export async function isFastembedModelCached(model: string, cacheDir: string): Promise<boolean> {
 	const source = FASTEMBED_MODEL_SOURCES[model];
-	if (source === undefined) return false;
-	const modelDir = path.join(cacheDir, source.repo.replace("/", "_"));
+	const modelDir = fastembedModelDir(model, cacheDir);
+	if (source === undefined || modelDir === null) return false;
 	const present = await Promise.all(
 		[...source.files, ...FASTEMBED_TOKENIZER_FILES].map(file =>
 			fs.access(path.join(modelDir, file)).then(
