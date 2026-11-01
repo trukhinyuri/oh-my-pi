@@ -67,7 +67,8 @@
   "files": [
     "src",
     "README.md",
-    "CHANGELOG.md"
+    "CHANGELOG.md",
+    "THIRD_PARTY_NOTICES.md"
   ],
   "exports": {
     ".": {

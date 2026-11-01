@@ -351,16 +351,25 @@ function isFlagEmbedding(model: object): model is FlagEmbeddingFields {
  * the same two files its tokenizer setup reads; `null` when they do not name one.
  */
 async function readPadToken(modelDir: string): Promise<{ padId: number; padToken: string } | null> {
-	const [config, tokenizerConfig]: unknown[] = await Promise.all([
-		Bun.file(path.join(modelDir, "config.json")).json(),
-		Bun.file(path.join(modelDir, "tokenizer_config.json")).json(),
-	]);
+	let config: unknown;
+	let tokenizerConfig: unknown;
+	try {
+		[config, tokenizerConfig] = await Promise.all([
+			Bun.file(path.join(modelDir, "config.json")).json(),
+			Bun.file(path.join(modelDir, "tokenizer_config.json")).json(),
+		]);
+	} catch {
+		// Optimization is optional: an already initialized model remains usable.
+		return null;
+	}
 	if (typeof config !== "object" || config === null || !("pad_token_id" in config)) return null;
 	if (typeof tokenizerConfig !== "object" || tokenizerConfig === null || !("pad_token" in tokenizerConfig))
 		return null;
 	const { pad_token_id: padId } = config;
 	const { pad_token: padToken } = tokenizerConfig;
-	return typeof padId === "number" && typeof padToken === "string" ? { padId, padToken } : null;
+	return typeof padId === "number" && Number.isSafeInteger(padId) && padId >= 0 && typeof padToken === "string"
+		? { padId, padToken }
+		: null;
 }
 
 /** fastembed's pooling for one row: the first token (`cls`), or the mean of the tokens the mask keeps. */
@@ -396,6 +405,9 @@ async function* embedBatchLongest(
 	texts: string[],
 	batchSize = 256,
 ): AsyncGenerator<number[][], void, unknown> {
+	if (!Number.isSafeInteger(batchSize) || batchSize <= 0) {
+		throw new RangeError("Embedding batch size must be a positive safe integer");
+	}
 	for (let start = 0; start < texts.length; start += batchSize) {
 		const batch = texts.slice(start, start + batchSize);
 		const rows = (await fields.tokenizer.encodeBatch(batch)).map(text => ({
@@ -446,8 +458,8 @@ async function* embedBatchLongest(
  * while each forward pass only covers the batch's real length; pooling and
  * normalization repeat fastembed's.
  *
- * Switching the padding changes the tokenizer `model` owns, so only the
- * returned object may embed with it afterwards. Anything that is not a
+ * The tokenizer and embedding method are updated together on the initialized
+ * model, preserving its query and passage helpers. Anything that is not a
  * fastembed `FlagEmbedding`, or a model whose files name no pad token, comes
  * back as it was.
  */
@@ -458,9 +470,13 @@ export async function withBatchLongestPadding<T extends object>(
 	if (modelDir === null || !isFlagEmbedding(model)) return model;
 	const padding = await readPadToken(modelDir);
 	if (padding === null) return model;
-	model.tokenizer.setPadding(padding);
 	const { Tensor } = pairedFastembedOrt();
-	return { embed: (texts, batchSize) => embedBatchLongest(model, Tensor, texts, batchSize) };
+	model.tokenizer.setPadding(padding);
+	// Keep fastembed's query/passages helpers: they call this.embed with their
+	// required prefixes, which must not disappear when padding is optimized.
+	return Object.assign(model, {
+		embed: (texts: string[], batchSize?: number) => embedBatchLongest(model, Tensor, texts, batchSize),
+	});
 }
 
 export function loadFastembed(): Promise<FastembedModule> {

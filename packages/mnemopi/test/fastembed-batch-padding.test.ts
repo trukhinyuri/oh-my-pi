@@ -1,4 +1,4 @@
-import { describe, expect, spyOn, test } from "bun:test";
+import { afterEach, describe, expect, mock, spyOn, test } from "bun:test";
 import { getFastembedCacheDir } from "@oh-my-pi/pi-utils";
 import type * as Fastembed from "fastembed";
 import type * as Ort from "onnxruntime-node";
@@ -73,12 +73,15 @@ function expectSameDirections(actual: number[][], expected: number[][]): void {
 	}
 }
 
+afterEach(() => mock.restore());
+
 describe.skipIf(!MODEL_READY)("local fastembed embeddings", () => {
 	test("pad each batch only to its longest text, capped at the model limit, without turning a vector", async () => {
 		const fastembed = await runtime.loadFastembed();
 		// fastembed's own `embed` on the same model and session is the reference.
 		let reference: number[][] = [];
 		let overlongReference: number[][] = [];
+		let queryReference: number[] = [];
 		let passes: ForwardPass[] = [];
 		const loadSpy = spyOn(runtime, "loadFastembed").mockResolvedValue({
 			...fastembed,
@@ -86,6 +89,7 @@ describe.skipIf(!MODEL_READY)("local fastembed embeddings", () => {
 				init: async (options: LocalModelInitOptions) => {
 					const model = await fastembed.FlagEmbedding.init(options);
 					reference = await collect(model.embed([...TEXTS]));
+					queryReference = await model.queryEmbed("memory recall");
 					overlongReference = await collect(model.embed([OVERLONG]));
 					passes = recordForwardPasses(sessionOf(model));
 					return model;
@@ -109,6 +113,13 @@ describe.skipIf(!MODEL_READY)("local fastembed embeddings", () => {
 			expect(truncated?.dims).toEqual([1, MAX_TOKENS]);
 			expectSameDirections(vectors, reference);
 			expectSameDirections(overlong, overlongReference);
+			if (!model.queryEmbed) throw new Error("Padding optimization dropped queryEmbed");
+			expectSameDirections([await model.queryEmbed("memory recall")], [queryReference]);
+			expectSameDirections(await collect(model.embed(TEXTS.slice(0, 2), 1)), reference.slice(0, 2));
+			expect(await collect(model.embed([]))).toEqual([]);
+			for (const size of [0, -1, NaN, Infinity, 1.5]) {
+				await expect(collect(model.embed([TEXTS[0]!], size))).rejects.toThrow(RangeError);
+			}
 		} finally {
 			loadSpy.mockRestore();
 		}
