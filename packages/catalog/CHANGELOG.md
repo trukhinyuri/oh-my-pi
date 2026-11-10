@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Fixed a discovered Anthropic model that is not in the bundled catalog losing the image input it had cached when a refresh could not reach the models.dev catalog ([#TBD](https://github.com/can1357/oh-my-pi/pull/TBD) by [@trukhinyuri](https://github.com/trukhinyuri))
+
 ## [18.18.7] - 2026-11-10
 
 - Morph (`api.morphllm.com`) requests now send `x-session-id`, keeping a conversation on the worker that holds its prompt cache ([#18704](https://github.com/can1357/oh-my-pi/pull/18704) by [@wolfiesch](https://github.com/wolfiesch))

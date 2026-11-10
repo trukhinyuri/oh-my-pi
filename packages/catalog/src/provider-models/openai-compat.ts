@@ -10,7 +10,7 @@ import {
 	isLikelyOpenAIResponsesId,
 	modelLimitsFor,
 } from "../compat/behavior";
-import { resolveAnthropicApiVersion } from "../compat/anthropic";
+import { isOfficialAnthropicApiUrl, resolveAnthropicApiVersion } from "../compat/anthropic";
 import { xaiResponsesReasoningEffortMap } from "../compat/openai";
 import { hasModelScopedEffortLadder, resolveModelPolicy } from "../compat/resolve";
 import { compareRevision, parseRevision, revisionAtLeast } from "../compat/revision";
@@ -83,7 +83,8 @@ const MODELS_DEV_URL = "https://catalog.stencil.so/models.json.zstd";
 /** Little-endian magic number opening every zstd frame (RFC 8878). */
 const ZSTD_MAGIC = 0xfd2fb528;
 
-const ANTHROPIC_BASE_URL = "https://api.anthropic.com/v1";
+/** Base URL of first-party model rows: the provider's bare host, not the `/v1` discovery URL. */
+const ANTHROPIC_BASE_URL = "https://api.anthropic.com";
 const ANTHROPIC_OAUTH_BETA =
 	"claude-code-20250219,oauth-2025-04-20,interleaved-thinking-2025-05-14,redact-thinking-2026-02-12,context-management-2025-06-27,prompt-caching-scope-2026-01-05,advanced-tool-use-2025-11-20,effort-2025-11-24,extended-cache-ttl-2025-04-11";
 
@@ -7015,11 +7016,19 @@ export function anthropicModelManagerOptions(
 	config?: AnthropicModelManagerConfig,
 ): ModelManagerOptions<"anthropic-messages"> {
 	const apiKey = config?.apiKey;
-	// The registry derives `config.baseUrl` from an existing bundled model, and
-	// bundled Anthropic rows use both `https://api.anthropic.com` and `.../v1`.
+	// The registry derives `config.baseUrl` from an existing model row — the
+	// seeded bare host (`https://api.anthropic.com`) or an earlier discovered
+	// row's base — and passes nothing until its full catalog is composed.
 	// Discovery must always hit `/v1/models`, so the `/v1` suffix is enforced on
-	// the discovery URL while model rows keep the provider base (#6563).
-	const baseUrl = normalizeAnthropicBaseUrl(config?.baseUrl, ANTHROPIC_BASE_URL);
+	// the discovery URL (#6563), while rows for the official API always carry
+	// the bare host: a row that moves between the two forms reads as an endpoint
+	// change against the cached or bundled row of the same model, which makes
+	// the new row's capabilities authoritative.
+	const configuredBaseUrl = normalizeAnthropicBaseUrl(config?.baseUrl, ANTHROPIC_BASE_URL);
+	const baseUrl =
+		isOfficialAnthropicApiUrl(configuredBaseUrl) && configuredBaseUrl.endsWith("/v1")
+			? configuredBaseUrl.slice(0, -3)
+			: configuredBaseUrl;
 	const discoveryBaseUrl = toAnthropicDiscoveryBaseUrl(baseUrl);
 	return {
 		providerId: "anthropic",
